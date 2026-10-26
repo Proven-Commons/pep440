@@ -1,13 +1,16 @@
 /-
   The version value type, the printer, and the precedence
-  comparison, for PEP 440 version identifiers without a local
-  version part.
+  comparison, for PEP 440 version identifiers, local version
+  part included.
 
   A version holds an epoch, a release list of numbers, an
   optional pre-release (one of the kinds a, b, rc, with a
-  number), an optional post-release number, and an optional
-  dev-release number. The spellings a text may use for these
-  parts are the parser's business; the value holds the three
+  number), an optional post-release number, an optional
+  dev-release number, and an optional local part. The local
+  part is a list of segments; a segment is a number, or a text
+  of lowercase letters and digits that holds at least one
+  letter. The spellings a text may use for these parts are
+  the parser's business; the value holds the three
   pre-release kinds the ordering uses.
 -/
 
@@ -33,20 +36,28 @@ def PreKind.text : PreKind → List Char
   | .b => ['b']
   | .rc => ['r', 'c']
 
-/-- A PEP 440 version, without a local part. The release list
-    holds at least one number in a well formed version. -/
+/-- One segment of a local version part: a number, or a text.
+    A text segment is held lowercase, as a list of characters.
+    A segment of digits only is a number segment, never a text
+    segment; the well-formedness rule below says a text
+    segment holds at least one letter. -/
+inductive LocalSeg where
+  | num (n : Nat)
+  | str (cs : List Char)
+  deriving DecidableEq, Repr
+
+/-- A PEP 440 version. The release list holds at least one
+    number in a well formed version. The local part is absent
+    (`none`) when the text names none, which is a different
+    value from any local part that is there. -/
 structure Version where
   epoch : Nat
   release : List Nat
   pre : Option (PreKind × Nat)
   post : Option Nat
   dev : Option Nat
+  localPart : Option (List LocalSeg)
   deriving DecidableEq, Repr
-
-/-- A version is well formed when its release list is not
-    empty. Every other part is a number or an optional number,
-    and numbers print canonically by construction. -/
-def WF (v : Version) : Prop := v.release ≠ []
 
 /-! ## Characters and digits -/
 
@@ -69,6 +80,43 @@ def isSep (c : Char) : Bool := c = '.' || c = '-' || c = '_'
     insensitively, through this function. -/
 def lower (c : Char) : Char :=
   if 65 ≤ c.toNat ∧ c.toNat ≤ 90 then Char.ofNat (c.toNat + 32) else c
+
+/-- A lowercase ASCII letter, as a test. -/
+def isLetter (c : Char) : Bool := 97 ≤ c.toNat && c.toNat ≤ 122
+
+/-- An ASCII letter of either case, as a test. -/
+def isAlpha (c : Char) : Bool :=
+  (65 ≤ c.toNat && c.toNat ≤ 90) || isLetter c
+
+/-- A letter of either case or a digit: the characters a local
+    segment is made of, as a test. -/
+def isAlnum (c : Char) : Bool := isDigit c || isAlpha c
+
+/-- A lowercase letter or a digit: the characters a text
+    segment is held in, as a test. -/
+def isLowerAlnum (c : Char) : Bool := isDigit c || isLetter c
+
+/-- A local segment is well formed when a text segment is not
+    empty, is held in lowercase letters and digits only, and
+    holds at least one letter. A number segment is always well
+    formed. -/
+def LocalSeg.WF : LocalSeg → Prop
+  | .num _ => True
+  | .str cs => cs ≠ [] ∧ (∀ c ∈ cs, isLowerAlnum c = true) ∧
+      (∃ c ∈ cs, isLetter c = true)
+
+/-- An optional local part is well formed when an absent part
+    is simply fine, and a part that is there holds at least
+    one segment, every one of them well formed. -/
+def LocalOptWF : Option (List LocalSeg) → Prop
+  | none => True
+  | some segs => segs ≠ [] ∧ ∀ s ∈ segs, LocalSeg.WF s
+
+/-- A version is well formed when its release list is not
+    empty and its local part is well formed. Every other part
+    is a number or an optional number, and numbers print
+    canonically by construction. -/
+def WF (v : Version) : Prop := v.release ≠ [] ∧ LocalOptWF v.localPart
 
 /-- The character for a digit value below 10. Any other value
     gives '0'; the lemmas about this function all ask for a value
@@ -136,10 +184,23 @@ def printDev : Option Nat → List Char
   | none => []
   | some n => '.' :: ("dev".toList ++ printNat n)
 
+/-- One local segment: a number in plain decimal, or a text as
+    it is held. -/
+def printLocalSeg : LocalSeg → List Char
+  | .num n => printNat n
+  | .str cs => cs
+
+/-- The local part: a plus, then the segments joined by dots.
+    An absent part writes nothing, so a version with no local
+    part never prints a plus. -/
+def printLocal : Option (List LocalSeg) → List Char
+  | none => []
+  | some segs => '+' :: joinDots (segs.map printLocalSeg)
+
 /-- The canonical text of a version. -/
 def print (v : Version) : List Char :=
   printEpoch v.epoch ++ printRelease v.release ++ printPre v.pre ++
-    printPost v.post ++ printDev v.dev
+    printPost v.post ++ printDev v.dev ++ printLocal v.localPart
 
 /-! ## Precedence, following the ordering key of PEP 440 -/
 
@@ -230,8 +291,58 @@ def devKey (v : Version) : Key :=
   | none => .posInf
   | some n => .num n
 
+/-- Compare two characters by their character codes. The
+    characters of a local text segment are lowercase letters
+    and digits, whose codes are their ASCII codes, so this is
+    ASCII code order on them. -/
+def cmpChar (a b : Char) : Ordering := cmpNat a.toNat b.toNat
+
+/-- Lexicographic comparison of two character lists by
+    character codes. When one is a prefix of the other, the
+    shorter one is lower. -/
+def cmpChars : List Char → List Char → Ordering
+  | [], [] => .eq
+  | [], _ :: _ => .lt
+  | _ :: _, [] => .gt
+  | a :: as, b :: bs =>
+    match cmpChar a b with
+    | .eq => cmpChars as bs
+    | o => o
+
+/-- Compare two local segments, as PEP 440 gives it: a text
+    segment sorts before a number segment (the PEP's words are
+    that a numeric segment always compares as greater than a
+    lexicographic one); two numbers compare by value; two
+    texts compare character by character. -/
+def cmpLocalSeg : LocalSeg → LocalSeg → Ordering
+  | .num a, .num b => cmpNat a b
+  | .num _, .str _ => .gt
+  | .str _, .num _ => .lt
+  | .str a, .str b => cmpChars a b
+
+/-- Compare two local parts segment by segment. When one list
+    is a prefix of the other, the shorter one is lower. -/
+def cmpLocalSegs : List LocalSeg → List LocalSeg → Ordering
+  | [], [] => .eq
+  | [], _ :: _ => .lt
+  | _ :: _, [] => .gt
+  | a :: as, b :: bs =>
+    match cmpLocalSeg a b with
+    | .eq => cmpLocalSegs as bs
+    | o => o
+
+/-- The local key of a version: a version with no local part
+    sorts before the same version with one. Two parts that are
+    there compare segment by segment. -/
+def cmpLocal : Option (List LocalSeg) → Option (List LocalSeg) → Ordering
+  | none, none => .eq
+  | none, some _ => .lt
+  | some _, none => .gt
+  | some a, some b => cmpLocalSegs a b
+
 /-- Precedence, as the ordering key of PEP 440 gives it: epoch,
-    then the padded release, then the pre, post, and dev keys. -/
+    then the padded release, then the pre, post, and dev keys,
+    then the local part. -/
 def compare (v w : Version) : Ordering :=
   match cmpNat v.epoch w.epoch with
   | .eq =>
@@ -240,7 +351,10 @@ def compare (v w : Version) : Ordering :=
       match cmpPreKey (preKey v) (preKey w) with
       | .eq =>
         match cmpKey (postKey v) (postKey w) with
-        | .eq => cmpKey (devKey v) (devKey w)
+        | .eq =>
+          match cmpKey (devKey v) (devKey w) with
+          | .eq => cmpLocal v.localPart w.localPart
+          | o => o
         | o => o
       | o => o
     | o => o

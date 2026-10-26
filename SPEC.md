@@ -1,24 +1,25 @@
 # Specification: pep440
 
-This is the specification this library implements: the version scheme of PEP 440, restricted to versions without a local part. Where the PEP leaves a point open, the rule this library follows is stated and marked as a choice. `packaging`, the Python library that implements PEP 440, is the reference the tests compare against; its version and the points where this library differs from it are recorded in `tests/TEST-RESULTS.md`.
+This is the specification this library implements: the version scheme of PEP 440, local part included. Where the PEP leaves a point open, the rule this library follows is stated and marked as a choice. `packaging`, the Python library that implements PEP 440, is the reference the tests compare against; its version and the points where this library differs from it are recorded in `tests/TEST-RESULTS.md`.
 
 ## Values
 
-A version is five parts:
+A version is six parts:
 
 - an epoch, a natural number, 0 when the text names none;
 - a release, a list of natural numbers, at least one;
 - an optional pre-release: one of the kinds `a`, `b`, `rc`, with a natural number;
 - an optional post-release number;
-- an optional dev-release number.
+- an optional dev-release number;
+- an optional local part: a list of segments, where a segment is a number, or a text held as a list of characters.
 
-A version is well formed when its release list is not empty. Every other part is a number or an optional number by construction.
+A version is well formed when its release list is not empty and its local part is well formed. Every other part is a number or an optional number by construction.
 
-There is no local part. A text with a `+` in it is not a version in this slice.
+An absent local part (no `+` in the text) is a different value from every local part that is there. A local part that is there is well formed when it holds at least one segment and every segment is well formed: a number segment always is, and a text segment is well formed when it is not empty, is held in lowercase letters and digits only, and holds at least one letter. The last rule is what makes it a text segment: a segment of digits only is a number segment.
 
 ## The grammar
 
-A text is read in stages: an optional leading `v`, the epoch, the release, then the pre-release, post-release, and dev-release segments in that order. A segment that is not there reads as absent and leaves the text untouched for the next stage. Anything left over at the end rejects the text.
+A text is read in stages: an optional leading `v`, the epoch, the release, then the pre-release, post-release, and dev-release segments in that order, then the local part. A segment that is not there reads as absent and leaves the text untouched for the next stage. Anything left over at the end rejects the text.
 
 ### Leading v
 
@@ -76,9 +77,17 @@ The implicit form is tried first. When a `-` is not followed by a digit, the lab
 
 The dev-release segment is: an optional separator, the spelling `dev`, then an optional number behind an optional separator, defaulting to 0: `1.0.dev1`, `1.0dev`, `1.0_dev4`. The spelling matches without case.
 
+### Local part
+
+A `+` after the dev-release stage opens the local part: one or more segments split by single separators, where a separator is a dot, a hyphen, or an underscore. A segment is a nonempty run of letters and digits. A segment of digits only reads as a number segment, read as its value, so leading zeros drop (`007` is the number 7). Any other segment reads as a text segment, lowercased, so `ABC` and `abc` are the same segment, and `foo-bar`, `foo_bar`, and `foo.bar` are the same local part.
+
+The local grammar rejects: a `+` with nothing after it (`1.0+`), an empty segment (`1.0+a..b`, `1.0+.a`, `1.0+a.`), a second `+` (`1.0+a+b`, `1.0++a`), and any character outside letters, digits, and the three separators (`1.0+a$b`). A local part that opens with a `+` but breaks these rules is not read as an absent local part: its text is left over, and the end check rejects the whole text.
+
+In the PEP's own grammar the local label is written with dots, hyphens, and underscores all read as separators and normalized away, which is the reading here.
+
 ### Order of the segments, and rejection
 
-The segments come in one order: pre, then post, then dev. A spelling out of order is left over and rejects the text: `1.0.post1a1` (a pre spelling after a post) and `1.0dev1.post1` (a post after a dev) are rejected. A pre spelling with letters after its number, such as `1.0a1b2`, is rejected the same way. Letters outside the named spellings reject the text wherever they stand, as do an empty text and a `+` anywhere: the plus would open a local version, which is outside this slice, and no stage reads one, so `1.0+local` is rejected.
+The parts come in one order: pre, then post, then dev, then the local part. A spelling out of order is left over and rejects the text: `1.0.post1a1` (a pre spelling after a post) and `1.0dev1.post1` (a post after a dev) are rejected. A pre spelling with letters after its number, such as `1.0a1b2`, is rejected the same way. Letters outside the named spellings reject the text wherever they stand, as does an empty text.
 
 ## The printer
 
@@ -88,11 +97,12 @@ The canonical text of a version is:
 - the release numbers as held, joined by dots;
 - the pre-release as `.aN`, `.bN`, or `.rcN`: a dot, the kind, the number;
 - the post-release as `.postN`;
-- the dev-release as `.devN`.
+- the dev-release as `.devN`;
+- the local part, when it is there, as a `+` and the segments joined by dots: a number segment in plain decimal, a text segment as it is held.
 
-Each part that is absent writes nothing. So the version spelled `1.0alpha1` prints as `1.0.a1`, `1.0-1` prints as `1.0.post1`, and `v2.0RC1` prints as `2.0.rc1`.
+Each part that is absent writes nothing. So the version spelled `1.0alpha1` prints as `1.0.a1`, `1.0-1` prints as `1.0.post1`, `v2.0RC1` prints as `2.0.rc1`, and `1.0+foo-bar` prints as `1.0+foo.bar`.
 
-One named difference from `packaging`: the printed pre-release here carries a dot, where `packaging` prints the same value without one (`1.0a1` for what prints here as `1.0.a1`). The values are the same; the texts differ. The test results record how often this came up in the random run, with an example.
+One named difference from `packaging`: the printed pre-release here carries a dot, where `packaging` prints the same value without one (`1.0a1` for what prints here as `1.0.a1`). The values are the same; the texts differ. The test results record how often this came up in the random run, with an example. A local part prints exactly as `packaging` prints it, so no difference comes from there.
 
 ## Precedence
 
@@ -106,6 +116,11 @@ Two versions compare by the ordering key of PEP 440, applied in this order:
    - otherwise the kind and the number: kinds order `a` below `b` below `rc`, then the numbers compare.
 4. The post-release keys compare: a missing post is the bottom value, below every post number; a present post is its number.
 5. The dev-release keys compare: a missing dev is the top value, above every dev number; a present dev is its number.
+6. The local parts compare. A version with no local part sorts before the same version with one. Two local parts that are there compare segment by segment:
+   - a text segment sorts before a number segment. The PEP's words: when a numeric segment and a lexicographic segment are compared, the numeric segment always compares as greater;
+   - two number segments compare by value;
+   - two text segments compare character by character in ASCII code order over the lowercase letters and digits they are held in (the PEP compares them lexicographically and without case, which is this order once the text is held lowercase);
+   - when one list is a prefix of the other, the shorter one sorts first.
 
 The first step that decides is the answer. The key is built from an explicit three-part value (below all numbers, a number, above all numbers) for the post and dev keys, and a like value with a kind-and-number middle for the pre key, so the comparison is a plain computable function of the two versions.
 
@@ -115,10 +130,11 @@ The example chain printed in PEP 440, which the proofs check step by step:
 
 ## The claims
 
-- `parse_print`: parsing the printed form of a well formed version gives the version back.
+- `parse_print`: parsing the printed form of a well formed version, local part included, gives the version back. Well formed is the rule of the Values section: a nonempty release, and a local part that is absent, or holds at least one segment with every text segment nonempty, lowercase letters and digits only, and holding at least one letter.
 - The chain above, step by step, proved by computation on the concrete texts, and the shorter example chain from the claim (a dev release alone below a pre-release with a dev number below the pre-release; a release below a post with a dev number below the post).
-- Equal spellings compare equal, proved the same way on concrete texts: `1.0` against `1.0.0`, `1.0a1` against `1.0.alpha1`, and more in `Proofs/Examples.lean`.
-- Example valid texts print back in canonical form, and example invalid texts are rejected, also proved by computation.
+- The local ordering rules, proved the same way on concrete texts: `1.0` below `1.0+1`; `1.0+abc` below `1.0+1` and `1.0+a1` below `1.0+1` (a text segment below a number segment); `1.0+abc` below `1.0+abc.1` (the prefix rule); `1.0+1` below `1.0+2`; `1.0+abc` below `1.0+abd`.
+- Equal spellings compare equal, proved the same way on concrete texts: `1.0` against `1.0.0`, `1.0a1` against `1.0.alpha1`, `1.0+ABC` against `1.0+abc`, `1.0+foo-bar` against `1.0+foo.bar`, `1.0+007` against `1.0+7`, and more in `Proofs/Examples.lean`.
+- Example valid texts print back in canonical form, local parts included, and example invalid texts are rejected, the broken local shapes among them, also proved by computation.
 
 The comparison is not proved to be a full order in this slice: no transitivity or totality theorem is claimed. Accept and reject completeness (that the parser accepts every text the grammar allows and rejects every text it forbids) is not proved either; the tests check it against `packaging` and a strict reading of the grammar.
 

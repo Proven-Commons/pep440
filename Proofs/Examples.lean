@@ -8,7 +8,9 @@
   spellings of one version compare equal. The third block
   checks that valid texts parse and print back in canonical
   form. The fourth block checks that texts the grammar forbids
-  are rejected.
+  are rejected. A fifth block checks the local part: its
+  ordering rules, its canonical reprints, equal spellings of
+  one local part, and the local texts the grammar forbids.
 -/
 
 import Pep440
@@ -162,8 +164,6 @@ theorem reprint_pre_post_dash : (parse "1.0a1-2".toList).map print =
 
 theorem invalid_empty : parse "".toList = none := by decide
 
-theorem invalid_local : parse "1.0+local".toList = none := by decide
-
 theorem invalid_empty_release_part : parse "1.0..1".toList = none := by decide
 
 theorem invalid_trailing_dot : parse "1.".toList = none := by decide
@@ -198,5 +198,98 @@ theorem invalid_letter_prefix : parse "x1.0".toList = none := by decide
 
 theorem invalid_dash_after_post : parse "1.0a1.post1-2".toList = none := by
   decide
+
+/-! ## The local part: ordering, reprints, and rejections -/
+
+/-- A version with no local part sorts before the same
+    version with one. -/
+theorem local_absent_first : cmpTexts "1.0" "1.0+1" = some Ordering.lt := by
+  decide
+
+/-- A text segment sorts before a number segment: the PEP's
+    words are that a numeric segment always compares as
+    greater than a lexicographic one. -/
+theorem local_text_below_num : cmpTexts "1.0+abc" "1.0+1" =
+    some Ordering.lt := by
+  decide
+
+/-- The prefix rule: a local part that is a prefix of another
+    sorts first. -/
+theorem local_prefix : cmpTexts "1.0+abc" "1.0+abc.1" = some Ordering.lt := by
+  decide
+
+/-- Two number segments compare by value. -/
+theorem local_num_order : cmpTexts "1.0+1" "1.0+2" = some Ordering.lt := by
+  decide
+
+/-- An alphanumeric segment is a text segment, so it too
+    sorts before a number segment. -/
+theorem local_alnum_below_num : cmpTexts "1.0+a1" "1.0+1" =
+    some Ordering.lt := by
+  decide
+
+/-- Two text segments compare in character order. -/
+theorem local_text_order : cmpTexts "1.0+abc" "1.0+abd" =
+    some Ordering.lt := by
+  decide
+
+/-- Letter case in a local part carries no value: text
+    segments are held lowercase. -/
+theorem local_eq_case : cmpTexts "1.0+ABC" "1.0+abc" = some Ordering.eq := by
+  decide
+
+/-- The segment separators are one in the value: a hyphen and
+    a dot split a local part the same way. -/
+theorem local_eq_seps : cmpTexts "1.0+foo-bar" "1.0+foo.bar" =
+    some Ordering.eq := by
+  decide
+
+/-- Leading zeros in a number segment carry no value. -/
+theorem local_eq_zeros : cmpTexts "1.0+007" "1.0+7" = some Ordering.eq := by
+  decide
+
+theorem reprint_local_plain : (parse "1.0+local".toList).map print =
+    some "1.0+local".toList := by decide
+
+theorem reprint_local_case : (parse "1.0+ABC".toList).map print =
+    some "1.0+abc".toList := by decide
+
+theorem reprint_local_seps : (parse "1.0+foo-bar_baz".toList).map print =
+    some "1.0+foo.bar.baz".toList := by decide
+
+theorem reprint_local_zeros : (parse "1.0+007".toList).map print =
+    some "1.0+7".toList := by decide
+
+theorem reprint_local_after_pre : (parse "1.0a1+ubuntu.1".toList).map print =
+    some "1.0.a1+ubuntu.1".toList := by decide
+
+/-- A plus with nothing after it is rejected. -/
+theorem invalid_local_empty : parse "1.0+".toList = none := by decide
+
+/-- An empty segment is rejected. -/
+theorem invalid_local_empty_segment : parse "1.0+a..b".toList = none := by
+  decide
+
+/-- A trailing separator is rejected: it opens a segment
+    that is not there. -/
+theorem invalid_local_trailing_sep : parse "1.0+a.".toList = none := by
+  decide
+
+/-- A separator right after the plus is rejected the same
+    way. -/
+theorem invalid_local_leading_sep : parse "1.0+.a".toList = none := by
+  decide
+
+/-- A second plus inside a local part is rejected. -/
+theorem invalid_local_second_plus : parse "1.0+a+b".toList = none := by
+  decide
+
+/-- A plus right after the first one is rejected too. -/
+theorem invalid_local_double_plus : parse "1.0++a".toList = none := by
+  decide
+
+/-- A character outside letters, digits, and the separators
+    is rejected. -/
+theorem invalid_local_bad_char : parse "1.0+a$b".toList = none := by decide
 
 end Pep440.Examples

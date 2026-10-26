@@ -6,7 +6,7 @@
   decimal character codes.
 
     parse 49,46,48,97,49          prints  ok:49,46,48,46,97,49
-    parse 49,46,48,43,49          prints  none
+    parse 49,46,48,43,49          prints  ok:49,46,48,43,49
     cmp 49,46,48,59,49,46,48,46,48   prints  eq
 
   The operations are `parse` and `cmp`.

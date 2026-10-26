@@ -9,16 +9,17 @@ Written by `tests/run_tests.py`. Rerun it to check these numbers.
 ## Named differences from packaging
 
 - The canonical print of a pre-release carries a dot in this slice (for example `1.0.a1`), where packaging prints the same value without one (`1.0a1`).
-  In this run, 1667 of the random spelled versions printed differently in packaging; the first was spelled '2.00862067_ALpha-000', packaging prints it as '2.862067a0', this slice as '2.862067.a0'.
+  In this run, 1638 of the random spelled versions printed differently in packaging; the first was spelled '002.0862067-a-00+0A-fOo', packaging prints it as '2.862067a0+0a.foo', this slice as '2.862067.a0+0a.foo'.
 - Packaging accepts surrounding whitespace (for example ` 1.0` and `1.0 `); this slice rejects both. The fixed parse cases include both texts and expect rejection.
-- Packaging accepts local versions (for example `1.0+local`); local versions are out of this slice's scope and are rejected. The fixed parse cases include four local texts and expect rejection for each.
+- Local versions are in scope in this slice, and a local part prints exactly as packaging prints it: lowercase text, segments dot joined, numbers without leading zeros. Every print difference in this run traces to the pre-release dot above; no difference came from a local part.
 
-- fixed parse cases: 44 inputs, 44 agreements
-- fixed cmp cases: 33 inputs, 33 agreements
+- fixed parse cases: 58 inputs, 58 agreements
+- fixed cmp cases: 50 inputs, 50 agreements
 - random spelled versions, parse: 3000 inputs, 3000 agreements
 - random version pairs, cmp: 3000 inputs, 3000 agreements
+- random local pairs, cmp: 1000 inputs, 1000 agreements
 - mutated texts, parse: 3000 inputs, 3000 agreements
 - soup texts, parse: 1500 inputs, 1500 agreements
 - malformed requests: 12 inputs, 12 agreements
-- Total: 10589 inputs, 10589 agreements
+- Total: 11620 inputs, 11620 agreements
 - Failures: 0
