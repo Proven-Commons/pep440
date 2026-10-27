@@ -777,6 +777,404 @@ theorem parseDev_printDev_last (n : Nat) :
 
 /-- On empty text the dev-release reader finds nothing. -/
 theorem parseDev_none_nil : parseDev [] = (none, []) := by decide
+
+/-! ## Reading the printed local part back -/
+
+/-- A digit character is a letter-or-digit character. -/
+theorem isAlnum_of_isDigit {c : Char} (h : isDigit c = true) : isAlnum c = true := by
+  show (isDigit c || isAlpha c) = true
+  simp [h]
+
+/-- A lowercase letter is not a digit: their code ranges do
+    not meet. -/
+theorem isDigit_false_of_isLetter {c : Char} (h : isLetter c = true) :
+    isDigit c = false := by
+  cases hd : isDigit c with
+  | false => rfl
+  | true =>
+    exfalso
+    have h2 : 48 ≤ c.toNat ∧ c.toNat ≤ 57 := isDigit_iff.mp hd
+    have hh : ((97 ≤ c.toNat) && (c.toNat ≤ 122)) = true := h
+    rw [Bool.and_eq_true] at hh
+    have h97 : 97 ≤ c.toNat := of_decide_eq_true hh.1
+    omega
+
+/-- Lowering a lowercase letter changes nothing: a letter is
+    not an ASCII capital. -/
+theorem lower_of_isLetter {c : Char} (h : isLetter c = true) : lower c = c := by
+  have hh : ((97 ≤ c.toNat) && (c.toNat ≤ 122)) = true := h
+  rw [Bool.and_eq_true] at hh
+  have h97 : 97 ≤ c.toNat := of_decide_eq_true hh.1
+  unfold lower
+  rw [if_neg (by omega : ¬ (65 ≤ c.toNat ∧ c.toNat ≤ 90))]
+
+/-- Lowering a character of a held text segment changes
+    nothing: the character is a digit or a lowercase letter,
+    and neither is an ASCII capital. -/
+theorem lower_of_isLowerAlnum {c : Char} (h : isLowerAlnum c = true) :
+    lower c = c := by
+  have hh : (isDigit c || isLetter c) = true := h
+  rw [Bool.or_eq_true] at hh
+  rcases hh with hd | hl
+  · exact lower_digit hd
+  · exact lower_of_isLetter hl
+
+/-- A character held in a text segment is a letter-or-digit
+    character. -/
+theorem isAlnum_of_isLowerAlnum {c : Char} (h : isLowerAlnum c = true) :
+    isAlnum c = true := by
+  have hh : (isDigit c || isLetter c) = true := h
+  rw [Bool.or_eq_true] at hh
+  rcases hh with hd | hl
+  · exact isAlnum_of_isDigit hd
+  · show (isDigit c || isAlpha c) = true
+    have ha : isAlpha c = true := by
+      show ((65 ≤ c.toNat && c.toNat ≤ 90) || isLetter c) = true
+      simp [hl]
+    simp [ha]
+
+/-- Every character of a list passes a test, so the `all` of
+    the test passes. -/
+theorem all_true_of_forall {p : Char → Bool} {cs : List Char}
+    (h : ∀ c ∈ cs, p c = true) : cs.all p = true := by
+  induction cs with
+  | nil => rfl
+  | cons c cs ih =>
+    show (p c && cs.all p) = true
+    rw [h c (by simp), ih (fun x hx => h x (by simp [hx])), Bool.and_true]
+
+/-- One character of a list fails a test, so the `all` of the
+    test fails. -/
+theorem all_false_of_mem {p : Char → Bool} {cs : List Char} {c : Char}
+    (hmem : c ∈ cs) (hc : p c = false) : cs.all p = false := by
+  induction cs with
+  | nil => simp at hmem
+  | cons x xs ih =>
+    show (p x && xs.all p) = false
+    rcases List.mem_cons.mp hmem with rfl | hxs
+    · rw [hc, Bool.false_and]
+    · rw [ih hxs, Bool.and_false]
+
+/-- Lowering every character of a list whose characters all
+    lower to themselves gives the list back. -/
+theorem map_lower_of_forall {cs : List Char} (h : ∀ c ∈ cs, lower c = c) :
+    cs.map lower = cs := by
+  induction cs with
+  | nil => rfl
+  | cons c cs ih =>
+    show lower c :: cs.map lower = c :: cs
+    rw [h c (by simp), ih (fun x hx => h x (by simp [hx]))]
+
+/-- A dot in front of a run ends the run: a dot is not a
+    letter or a digit. -/
+theorem headOk_dot_alnum (r : List Char) : HeadOk isAlnum ('.' :: r) := by
+  show isAlnum '.' = false
+  decide
+
+/-- A letter-or-digit run reads a printed list of such
+    characters back, over any tail that does not start with
+    one. -/
+theorem takeAlnum_append (ds rest : List Char)
+    (hall : ∀ c ∈ ds, isAlnum c = true) (h : HeadOk isAlnum rest) :
+    takeAlnum (ds ++ rest) = (ds, rest) := by
+  induction ds with
+  | nil =>
+    cases rest with
+    | nil => rfl
+    | cons c cs =>
+      have hc : isAlnum c = false := h
+      show takeAlnum (c :: cs) = ([], c :: cs)
+      simp [takeAlnum, hc]
+  | cons d ds ih =>
+    have hd : isAlnum d = true := hall d (by simp)
+    have hds : ∀ c ∈ ds, isAlnum c = true := fun c hc => hall c (by simp [hc])
+    show takeAlnum (d :: (ds ++ rest)) = (d :: ds, rest)
+    simp [takeAlnum, hd, ih hds]
+
+/-- A printed segment reads back as the segment, over any
+    tail that does not start with a letter or a digit. -/
+theorem parseLocalSeg_print (s : LocalSeg) (hs : LocalSeg.WF s)
+    (rest : List Char) (hok : HeadOk isAlnum rest) :
+    parseLocalSeg (printLocalSeg s ++ rest) = some (s, rest) := by
+  cases s with
+  | num n =>
+    show parseLocalSeg (printNat n ++ rest) = some (LocalSeg.num n, rest)
+    unfold parseLocalSeg
+    rw [takeAlnum_append (printNat n) rest
+      (fun c hc => isAlnum_of_isDigit (printNat_isDigit c hc)) hok]
+    show (if (printNat n).isEmpty then none
+      else if (printNat n).all isDigit then
+        some (LocalSeg.num (digitsValue (printNat n)), rest)
+      else some (LocalSeg.str ((printNat n).map lower), rest))
+      = some (LocalSeg.num n, rest)
+    rw [if_neg (by rw [List.isEmpty_iff]; exact printNat_ne_nil n :
+        ¬ ((printNat n).isEmpty = true)),
+      if_pos (all_true_of_forall printNat_isDigit), digitsValue_printNat]
+  | str cs =>
+    obtain ⟨hne, halnum, c₀, hc₀mem, hc₀letter⟩ := hs
+    have hnotall : ¬ (cs.all isDigit = true) := by
+      have hf : cs.all isDigit = false :=
+        all_false_of_mem hc₀mem (isDigit_false_of_isLetter hc₀letter)
+      rw [hf]
+      decide
+    show parseLocalSeg (cs ++ rest) = some (LocalSeg.str cs, rest)
+    unfold parseLocalSeg
+    rw [takeAlnum_append cs rest
+      (fun c hc => isAlnum_of_isLowerAlnum (halnum c hc)) hok]
+    show (if cs.isEmpty then none
+      else if cs.all isDigit then
+        some (LocalSeg.num (digitsValue cs), rest)
+      else some (LocalSeg.str (cs.map lower), rest))
+      = some (LocalSeg.str cs, rest)
+    rw [if_neg (by rw [List.isEmpty_iff]; exact hne :
+        ¬ (cs.isEmpty = true)), if_neg hnotall,
+      map_lower_of_forall (fun c hc => lower_of_isLowerAlnum (halnum c hc))]
+
+/-- What the segment reader needs from what stands after a
+    printed local part: nothing, or a first character that is
+    neither a separator (which would make the reader read
+    another segment) nor a letter or digit (which the last
+    segment's run would swallow). -/
+def SegEndOk (rest : List Char) : Prop :=
+  match rest with
+  | [] => True
+  | c :: _ => isSep c = false ∧ isAlnum c = false
+
+theorem segEndOk_nil : SegEndOk [] := trivial
+
+theorem SegEndOk.headOk {rest : List Char} (h : SegEndOk rest) :
+    HeadOk isAlnum rest := by
+  cases rest with
+  | nil => exact trivial
+  | cons c cs => exact h.2
+
+/-- The printed form of a segment is never empty. -/
+theorem printLocalSeg_ne_nil (s : LocalSeg) (hs : LocalSeg.WF s) :
+    printLocalSeg s ≠ [] := by
+  cases s with
+  | num n => exact printNat_ne_nil n
+  | str cs => exact hs.1
+
+/-- The number of local segments is at most the length of
+    their joined print, plus the tail. -/
+theorem local_length_le (segs : List LocalSeg)
+    (hwf : ∀ s ∈ segs, LocalSeg.WF s) (tail : List Char) :
+    segs.length ≤ (joinDots (segs.map printLocalSeg) ++ tail).length + 1 := by
+  rw [List.length_append]
+  have h := joinDots_length (segs.map printLocalSeg) (by
+    intro p hp
+    obtain ⟨s, hs, rfl⟩ := List.mem_map.mp hp
+    exact printLocalSeg_ne_nil s (hwf s hs))
+  simp only [List.length_map] at h
+  omega
+
+/-- Printed local segments read back. Induction on the fuel,
+    in the shape of the release reader's proof. -/
+theorem parseLocalGo_print : ∀ (fuel : Nat) (segs : List LocalSeg)
+    (rest : List Char), segs ≠ [] → (∀ s ∈ segs, LocalSeg.WF s) →
+    SegEndOk rest → segs.length ≤ fuel →
+    parseLocalGo fuel (joinDots (segs.map printLocalSeg) ++ rest)
+      = some (segs, rest) := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro segs rest hne _ _ hlen
+    cases segs with
+    | nil => exact absurd rfl hne
+    | cons s ss => simp at hlen
+  | succ f ih =>
+    intro segs rest hne hwf hok hlen
+    cases segs with
+    | nil => exact absurd rfl hne
+    | cons s ss =>
+      cases ss with
+      | nil =>
+        show parseLocalGo (f + 1) (printLocalSeg s ++ rest) = some ([s], rest)
+        show (match parseLocalSeg (printLocalSeg s ++ rest) with
+          | none => none
+          | some (t, rest') =>
+            match rest' with
+            | [] => some ([t], [])
+            | c :: rest'' =>
+              if isSep c then
+                match parseLocalGo f rest'' with
+                | some (ts, r) => some (t :: ts, r)
+                | none => none
+              else some ([t], c :: rest'')) = some ([s], rest)
+        rw [parseLocalSeg_print s (hwf s (by simp)) rest hok.headOk]
+        cases rest with
+        | nil => rfl
+        | cons c cs =>
+          have hc : isSep c = false := hok.1
+          show (if isSep c then
+              match parseLocalGo f cs with
+              | some (ts, r) => some (s :: ts, r)
+              | none => none
+            else some ([s], c :: cs)) = some ([s], c :: cs)
+          rw [if_neg (by simp [hc] : ¬ (isSep c = true))]
+      | cons s₂ ss' =>
+        show parseLocalGo (f + 1)
+            ((printLocalSeg s ++ '.' :: joinDots ((s₂ :: ss').map printLocalSeg))
+              ++ rest) = some (s :: s₂ :: ss', rest)
+        rw [List.append_assoc]
+        show (match parseLocalSeg
+            (printLocalSeg s ++ ('.' :: (joinDots ((s₂ :: ss').map printLocalSeg)
+              ++ rest))) with
+          | none => none
+          | some (t, rest') =>
+            match rest' with
+            | [] => some ([t], [])
+            | c :: rest'' =>
+              if isSep c then
+                match parseLocalGo f rest'' with
+                | some (ts, r) => some (t :: ts, r)
+                | none => none
+              else some ([t], c :: rest'')) = some (s :: s₂ :: ss', rest)
+        rw [parseLocalSeg_print s (hwf s (by simp)) _
+          (headOk_dot_alnum _)]
+        show (if isSep '.' then
+            match parseLocalGo f (joinDots ((s₂ :: ss').map printLocalSeg)
+              ++ rest) with
+            | some (ts, r) => some (s :: ts, r)
+            | none => none
+          else some ([s], '.' :: (joinDots ((s₂ :: ss').map printLocalSeg)
+            ++ rest))) = some (s :: s₂ :: ss', rest)
+        rw [if_pos (by decide : isSep '.' = true),
+          ih (s₂ :: ss') rest (by simp) (fun x hx => hwf x (by simp [hx])) hok
+            (by simp at hlen; omega)]
+
+/-- A printed local part reads back, with nothing left over. -/
+theorem parseLocal_print (loc : Option (List LocalSeg))
+    (h : LocalOptWF loc) : parseLocal (printLocal loc) = (loc, []) := by
+  cases loc with
+  | none => rfl
+  | some segs =>
+    obtain ⟨hne, hwf⟩ := h
+    have hlen : segs.length ≤ (joinDots (segs.map printLocalSeg)).length + 1 := by
+      have h := local_length_le segs hwf []
+      rwa [List.append_nil] at h
+    have hgo := parseLocalGo_print
+      ((joinDots (segs.map printLocalSeg)).length + 1) segs [] hne hwf
+      segEndOk_nil hlen
+    rw [List.append_nil] at hgo
+    show (match parseLocalGo ((joinDots (segs.map printLocalSeg)).length + 1)
+        (joinDots (segs.map printLocalSeg)) with
+      | some (ss, r) => (some ss, r)
+      | none => (none, '+' :: joinDots (segs.map printLocalSeg)))
+      = (some segs, [])
+    rw [hgo]
+
+/-- The separator drop on a plus. -/
+theorem dropSep_plus (cs : List Char) : dropSep ('+' :: cs) = '+' :: cs := by
+  show (if isSep '+' then cs else '+' :: cs) = '+' :: cs
+  rw [if_neg (by decide : ¬ (isSep '+' = true))]
+
+/-- The pre-release table finds nothing at a plus: no spelling
+    starts with one. -/
+theorem matchAny_pre_none_plus {cs : List Char} :
+    matchAny preSpellings ('+' :: cs) = none := by
+  have hα : matchWord "alpha".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'a')
+  have hβ : matchWord "beta".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'b')
+  have hprev : matchWord "preview".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'p')
+  have hpre : matchWord "pre".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'p')
+  have hrc : matchWord "rc".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'r')
+  have ha : matchWord "a".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'a')
+  have hb : matchWord "b".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'b')
+  have hc : matchWord "c".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'c')
+  simp only [preSpellings, matchAny, hα, hβ, hprev, hpre, hrc, ha, hb, hc]
+
+/-- The post-release table finds nothing at a plus. -/
+theorem matchAnyPat_none_plus {cs : List Char} :
+    matchAnyPat postSpellings ('+' :: cs) = none := by
+  have hpost : matchWord "post".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'p')
+  have hrev : matchWord "rev".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'r')
+  have hr : matchWord "r".toList ('+' :: cs) = none :=
+    matchWord_none_of_ne (by decide : lower '+' ≠ 'r')
+  simp only [postSpellings, matchAnyPat, hpost, hrev, hr]
+
+/-- The dev word does not match at a plus. -/
+theorem matchWord_dev_none_plus {cs : List Char} :
+    matchWord "dev".toList ('+' :: cs) = none :=
+  matchWord_none_of_ne (by decide : lower '+' ≠ 'd')
+
+/-- With a local part next, the pre-release reader finds no
+    spelling and gives the text back. -/
+theorem parsePre_none_plus {cs : List Char} :
+    parsePre ('+' :: cs) = (none, '+' :: cs) := by
+  show (match matchAny preSpellings (dropSep ('+' :: cs)) with
+    | some (k, rest) => let (n, rest') := optNum rest; (some (k, n), rest')
+    | none => (none, '+' :: cs)) = (none, '+' :: cs)
+  rw [dropSep_plus, matchAny_pre_none_plus]
+
+/-- With a local part next, the post-release reader finds no
+    spelling and gives the text back. -/
+theorem parsePost_none_plus {cs : List Char} :
+    parsePost ('+' :: cs) = (none, '+' :: cs) := by
+  show (match matchAnyPat postSpellings (dropSep ('+' :: cs)) with
+    | some rest => let (m, rest') := optNum rest; (some m, rest')
+    | none => (none, '+' :: cs)) = (none, '+' :: cs)
+  rw [dropSep_plus, matchAnyPat_none_plus]
+
+/-- With a local part next, the dev-release reader finds
+    nothing and gives the text back. -/
+theorem parseDev_none_plus {cs : List Char} :
+    parseDev ('+' :: cs) = (none, '+' :: cs) := by
+  show (match matchWord "dev".toList (dropSep ('+' :: cs)) with
+    | some rest => let (m, rest') := optNum rest; (some m, rest')
+    | none => (none, '+' :: cs)) = (none, '+' :: cs)
+  rw [dropSep_plus, matchWord_dev_none_plus]
+
+/-- On a printed local part, the pre-release reader finds
+    nothing. -/
+theorem parsePre_none_local (loc : Option (List LocalSeg)) :
+    parsePre (printLocal loc) = (none, printLocal loc) := by
+  cases loc with
+  | none => exact parsePre_none_nil
+  | some segs => exact parsePre_none_plus
+
+/-- On a printed local part, the post-release reader finds
+    nothing. -/
+theorem parsePost_none_local (loc : Option (List LocalSeg)) :
+    parsePost (printLocal loc) = (none, printLocal loc) := by
+  cases loc with
+  | none => exact parsePost_none_nil
+  | some segs => exact parsePost_none_plus
+
+/-- On a printed local part, the dev-release reader finds
+    nothing. -/
+theorem parseDev_none_local (loc : Option (List LocalSeg)) :
+    parseDev (printLocal loc) = (none, printLocal loc) := by
+  cases loc with
+  | none => exact parseDev_none_nil
+  | some segs => exact parseDev_none_plus
+
+/-- A printed local part never starts with a digit: it is
+    empty, or it opens with a plus. -/
+theorem local_tail_ok (loc : Option (List LocalSeg)) :
+    HeadOk isDigit (printLocal loc) := by
+  cases loc with
+  | none => exact headOk_nil _
+  | some segs =>
+    show isDigit '+' = false
+    decide
+
+/-- A printed dev segment and a printed local part together
+    never start with a digit. -/
+theorem dev_local_facts (dev : Option Nat) (loc : Option (List LocalSeg)) :
+    HeadOk isDigit (printDev dev ++ printLocal loc) := by
+  cases dev with
+  | some d => exact headOk_dot_digit _
+  | none => exact local_tail_ok loc
 /-! ## Facts about the printed tail -/
 
 /-- The head of a cons is not a bang, when the character is
@@ -785,16 +1183,21 @@ theorem headBang_dot {c : Char} (hc : c ≠ '!') {cs : List Char} :
     (c :: cs).head? ≠ some '!' :=
   fun h => hc (Option.some.inj h)
 
-/-- The printed tail (the pre, post, and dev segments, in
-    that nesting) never starts with a digit, never continues
+/-- The printed tail (the pre, post, dev, and local segments,
+    in that nesting) never starts with a digit, never continues
     the release, and never opens with a bang. In every case
     its first character, when it has one, is the dot of the
-    first segment that is there. -/
+    first segment that is there, or the plus of the local
+    part. -/
 theorem suffix_facts (pre : Option (PreKind × Nat)) (post : Option Nat)
-    (dev : Option Nat) :
-    HeadOk isDigit (printPre pre ++ (printPost post ++ printDev dev)) ∧
-    moreRelease (printPre pre ++ (printPost post ++ printDev dev)) = false ∧
-    (printPre pre ++ (printPost post ++ printDev dev)).head? ≠ some '!' := by
+    (dev : Option Nat) (loc : Option (List LocalSeg)) :
+    HeadOk isDigit
+      (printPre pre ++ (printPost post ++ (printDev dev ++ printLocal loc))) ∧
+    moreRelease
+      (printPre pre ++ (printPost post ++ (printDev dev ++ printLocal loc)))
+      = false ∧
+    (printPre pre ++ (printPost post ++ (printDev dev ++ printLocal loc))).head?
+      ≠ some '!' := by
   cases pre with
   | some p =>
     obtain ⟨k, -⟩ := p
@@ -808,24 +1211,23 @@ theorem suffix_facts (pre : Option (PreKind × Nat)) (post : Option Nat)
     | none =>
       cases dev with
       | some d => exact ⟨headOk_dot_digit _, rfl, headBang_dot (by decide)⟩
-      | none => exact ⟨headOk_nil _, rfl, by decide⟩
+      | none =>
+        cases loc with
+        | some segs =>
+          exact ⟨local_tail_ok (some segs), rfl, headBang_dot (by decide)⟩
+        | none => exact ⟨headOk_nil _, rfl, by decide⟩
 
-/-- The printed post and dev segments together never start
-    with a digit. -/
-theorem tail_facts (post : Option Nat) (dev : Option Nat) :
-    HeadOk isDigit (printPost post ++ printDev dev) := by
+/-- The printed post, dev, and local segments together never
+    start with a digit. -/
+theorem tail_facts (post : Option Nat) (dev : Option Nat)
+    (loc : Option (List LocalSeg)) :
+    HeadOk isDigit (printPost post ++ (printDev dev ++ printLocal loc)) := by
   cases post with
   | some m => exact headOk_dot_digit _
   | none =>
     cases dev with
     | some d => exact headOk_dot_digit _
-    | none => exact headOk_nil _
-
-/-- A printed dev segment never starts with a digit. -/
-theorem dev_tail_ok (dev : Option Nat) : HeadOk isDigit (printDev dev) := by
-  cases dev with
-  | some d => exact headOk_dot_digit _
-  | none => exact headOk_nil _
+    | none => exact local_tail_ok loc
 
 /-! ## The print, taken apart -/
 
@@ -835,33 +1237,38 @@ theorem bang_append (rest : List Char) : (['!'] ++ rest) = '!' :: rest := rfl
 
 /-- A print with epoch zero is the release print followed by
     the tail segments. The appends of the print lean left, so
-    two associativity steps put the release in front. -/
+    three associativity steps put the release in front. -/
 theorem print_zero (rel : List Nat) (pre : Option (PreKind × Nat))
-    (post : Option Nat) (dev : Option Nat) :
-    print ⟨0, rel, pre, post, dev⟩
-      = printRelease rel ++ (printPre pre ++ (printPost post ++ printDev dev)) := by
+    (post : Option Nat) (dev : Option Nat) (loc : Option (List LocalSeg)) :
+    print ⟨0, rel, pre, post, dev, loc⟩
+      = printRelease rel ++ (printPre pre
+          ++ (printPost post ++ (printDev dev ++ printLocal loc))) := by
   show printEpoch 0 ++ printRelease rel ++ printPre pre ++ printPost post
-      ++ printDev dev
-    = printRelease rel ++ (printPre pre ++ (printPost post ++ printDev dev))
+      ++ printDev dev ++ printLocal loc
+    = printRelease rel ++ (printPre pre
+        ++ (printPost post ++ (printDev dev ++ printLocal loc)))
   rw [show printEpoch 0 = [] from rfl, List.nil_append, List.append_assoc,
-    List.append_assoc]
+    List.append_assoc, List.append_assoc]
 
 /-- A print with a positive epoch is the epoch digits, a
     bang, and then the release print and the tail segments.
-    The appends of the print lean left, so four associativity
+    The appends of the print lean left, so five associativity
     steps bring the epoch to the front. -/
 theorem print_pos {e : Nat} (he : e ≠ 0) (rel : List Nat)
-    (pre : Option (PreKind × Nat)) (post : Option Nat) (dev : Option Nat) :
-    print ⟨e, rel, pre, post, dev⟩
+    (pre : Option (PreKind × Nat)) (post : Option Nat) (dev : Option Nat)
+    (loc : Option (List LocalSeg)) :
+    print ⟨e, rel, pre, post, dev, loc⟩
       = printNat e ++ ('!' :: (printRelease rel
-          ++ (printPre pre ++ (printPost post ++ printDev dev)))) := by
+          ++ (printPre pre
+            ++ (printPost post ++ (printDev dev ++ printLocal loc))))) := by
   show printEpoch e ++ printRelease rel ++ printPre pre ++ printPost post
-      ++ printDev dev
+      ++ printDev dev ++ printLocal loc
     = printNat e ++ ('!' :: (printRelease rel
-        ++ (printPre pre ++ (printPost post ++ printDev dev))))
+        ++ (printPre pre
+          ++ (printPost post ++ (printDev dev ++ printLocal loc)))))
   unfold printEpoch
   rw [if_neg he, List.append_assoc, List.append_assoc, List.append_assoc,
-    List.append_assoc, bang_append]
+    List.append_assoc, List.append_assoc, bang_append]
 
 /-- One release segment prints as its number. -/
 theorem printRelease_one (n : Nat) : printRelease [n] = printNat n := rfl
@@ -878,47 +1285,53 @@ theorem printRelease_cons2 (n m : Nat) (ns : List Nat) :
     chains the printer builds, whose appends lean left. -/
 theorem print_head_digit (v : Version) (h : WF v) :
     ∃ c cs, print v = c :: cs ∧ isDigit c = true := by
-  obtain ⟨e, rel, pre, post, dev⟩ := v
+  obtain ⟨e, rel, pre, post, dev, loc⟩ := v
   cases rel with
-  | nil => exact absurd rfl h
+  | nil => exact absurd rfl h.1
   | cons n ns =>
     by_cases he : e = 0
     · subst he
       obtain ⟨c, cs, hpn, hc⟩ := printNat_head n
       cases ns with
       | nil =>
-        refine ⟨c, cs ++ printPre pre ++ printPost post ++ printDev dev, ?_, hc⟩
-        have hform : print ⟨0, [n], pre, post, dev⟩
-            = printNat n ++ printPre pre ++ printPost post ++ printDev dev := by
-          show printEpoch 0 ++ printRelease [n] ++ printPre pre ++ printPost post
-              ++ printDev dev
+        refine ⟨c, cs ++ printPre pre ++ printPost post ++ printDev dev
+            ++ printLocal loc, ?_, hc⟩
+        have hform : print ⟨0, [n], pre, post, dev, loc⟩
             = printNat n ++ printPre pre ++ printPost post ++ printDev dev
+              ++ printLocal loc := by
+          show printEpoch 0 ++ printRelease [n] ++ printPre pre
+              ++ printPost post ++ printDev dev ++ printLocal loc
+            = printNat n ++ printPre pre ++ printPost post ++ printDev dev
+              ++ printLocal loc
           rw [show printEpoch 0 = [] from rfl, List.nil_append, printRelease_one]
         rw [hform, hpn]
         simp only [List.cons_append]
       | cons m ns' =>
         refine ⟨c, cs ++ ('.' :: joinDots ((m :: ns').map printNat))
-            ++ printPre pre ++ printPost post ++ printDev dev, ?_, hc⟩
-        have hform : print ⟨0, n :: m :: ns', pre, post, dev⟩
-            = (printNat n ++ '.' :: joinDots ((m :: ns').map printNat))
-              ++ printPre pre ++ printPost post ++ printDev dev := by
-          show printEpoch 0 ++ printRelease (n :: m :: ns') ++ printPre pre
-              ++ printPost post ++ printDev dev
+            ++ printPre pre ++ printPost post ++ printDev dev
+            ++ printLocal loc, ?_, hc⟩
+        have hform : print ⟨0, n :: m :: ns', pre, post, dev, loc⟩
             = (printNat n ++ '.' :: joinDots ((m :: ns').map printNat))
               ++ printPre pre ++ printPost post ++ printDev dev
+              ++ printLocal loc := by
+          show printEpoch 0 ++ printRelease (n :: m :: ns') ++ printPre pre
+              ++ printPost post ++ printDev dev ++ printLocal loc
+            = (printNat n ++ '.' :: joinDots ((m :: ns').map printNat))
+              ++ printPre pre ++ printPost post ++ printDev dev
+              ++ printLocal loc
           rw [show printEpoch 0 = [] from rfl, List.nil_append, printRelease_cons2]
         rw [hform, hpn]
         simp only [List.cons_append]
     · obtain ⟨c, cs, hpe, hc⟩ := printNat_head e
       refine ⟨c, cs ++ ['!'] ++ printRelease (n :: ns) ++ printPre pre
-          ++ printPost post ++ printDev dev, ?_, hc⟩
-      have hform : print ⟨e, n :: ns, pre, post, dev⟩
+          ++ printPost post ++ printDev dev ++ printLocal loc, ?_, hc⟩
+      have hform : print ⟨e, n :: ns, pre, post, dev, loc⟩
           = (printNat e ++ ['!']) ++ printRelease (n :: ns) ++ printPre pre
-            ++ printPost post ++ printDev dev := by
+            ++ printPost post ++ printDev dev ++ printLocal loc := by
         show printEpoch e ++ printRelease (n :: ns) ++ printPre pre
-            ++ printPost post ++ printDev dev
+            ++ printPost post ++ printDev dev ++ printLocal loc
           = (printNat e ++ ['!']) ++ printRelease (n :: ns) ++ printPre pre
-            ++ printPost post ++ printDev dev
+            ++ printPost post ++ printDev dev ++ printLocal loc
         unfold printEpoch
         rw [if_neg he]
       rw [hform, hpe]
@@ -950,178 +1363,293 @@ theorem stripV_print (v : Version) (h : WF v) : stripV (print v) = print v := by
 /-! ## The whole text reads back -/
 
 /-- Once the epoch is read, the rest of a print reads back:
-    the release, then the three tail segments in order. -/
+    the release, then the four tail segments in order. -/
 theorem parseRest_print (e : Nat) (rel : List Nat) (hrel : rel ≠ [])
-    (pre : Option (PreKind × Nat)) (post : Option Nat) (dev : Option Nat) :
+    (pre : Option (PreKind × Nat)) (post : Option Nat) (dev : Option Nat)
+    (loc : Option (List LocalSeg)) (hloc : LocalOptWF loc) :
     (parseRelease (printRelease rel
-      ++ (printPre pre ++ (printPost post ++ printDev dev)))).map
+      ++ (printPre pre ++ (printPost post ++ (printDev dev
+        ++ printLocal loc))))).map
       (fun (rel', rest₂) =>
         let (pre', rest₃) := parsePre rest₂
         let (post', rest₄) := parsePost rest₃
         let (dev', rest₅) := parseDev rest₄
-        (({ epoch := e, release := rel', pre := pre', post := post', dev := dev' } : Version), rest₅))
-      = some (⟨e, rel, pre, post, dev⟩, []) := by
-  obtain ⟨hok, hmr, -⟩ := suffix_facts pre post dev
+        let (loc', rest₆) := parseLocal rest₅
+        (({ epoch := e, release := rel', pre := pre', post := post',
+            dev := dev', localPart := loc' } : Version), rest₆))
+      = some (⟨e, rel, pre, post, dev, loc⟩, []) := by
+  obtain ⟨hok, hmr, -⟩ := suffix_facts pre post dev loc
   rw [parseRelease_print rel hrel _ hok hmr]
-  show some (let (pre', rest₃) := parsePre (printPre pre ++ (printPost post ++ printDev dev));
+  show some (let (pre', rest₃) := parsePre (printPre pre
+        ++ (printPost post ++ (printDev dev ++ printLocal loc)));
       let (post', rest₄) := parsePost rest₃;
       let (dev', rest₅) := parseDev rest₄;
-      (({ epoch := e, release := rel, pre := pre', post := post', dev := dev' } : Version), rest₅))
-      = some (⟨e, rel, pre, post, dev⟩, [])
+      let (loc', rest₆) := parseLocal rest₅;
+      (({ epoch := e, release := rel, pre := pre', post := post',
+          dev := dev', localPart := loc' } : Version), rest₆))
+      = some (⟨e, rel, pre, post, dev, loc⟩, [])
   cases pre with
   | none =>
     cases post with
     | none =>
       cases dev with
       | none =>
-        show some (let (pre', rest₃) := parsePre [];
+        show some (let (pre', rest₃) := parsePre (printLocal loc);
             let (post', rest₄) := parsePost rest₃;
             let (dev', rest₅) := parseDev rest₄;
-            (({ epoch := e, release := rel, pre := pre', post := post', dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, none, none, none⟩, [])
-        rw [parsePre_none_nil]
-        show some (let (post', rest₄) := parsePost [];
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := pre', post := post',
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, none, none, loc⟩, [])
+        rw [parsePre_none_local]
+        show some (let (post', rest₄) := parsePost (printLocal loc);
             let (dev', rest₅) := parseDev rest₄;
-            (({ epoch := e, release := rel, pre := none, post := post', dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, none, none, none⟩, [])
-        rw [parsePost_none_nil]
-        show some (let (dev', rest₅) := parseDev [];
-            (({ epoch := e, release := rel, pre := none, post := none, dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, none, none, none⟩, [])
-        rw [parseDev_none_nil]
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := none, post := post',
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, none, none, loc⟩, [])
+        rw [parsePost_none_local]
+        show some (let (dev', rest₅) := parseDev (printLocal loc);
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := none, post := none,
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, none, none, loc⟩, [])
+        rw [parseDev_none_local]
+        show some (let (loc', rest₆) := parseLocal (printLocal loc);
+            (({ epoch := e, release := rel, pre := none, post := none,
+                dev := none, localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, none, none, loc⟩, [])
+        rw [parseLocal_print loc hloc]
       | some d =>
-        show some (let (pre', rest₃) := parsePre ('.' :: 'd' :: 'e' :: 'v' :: printNat d);
+        show some (let (pre', rest₃) :=
+              parsePre ('.' :: 'd' :: 'e' :: 'v' :: (printNat d ++ printLocal loc));
             let (post', rest₄) := parsePost rest₃;
             let (dev', rest₅) := parseDev rest₄;
-            (({ epoch := e, release := rel, pre := pre', post := post', dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, none, none, some d⟩, [])
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := pre', post := post',
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, none, some d, loc⟩, [])
         rw [parsePre_none_d]
-        show some (let (post', rest₄) := parsePost ('.' :: 'd' :: 'e' :: 'v' :: printNat d);
+        show some (let (post', rest₄) :=
+              parsePost ('.' :: 'd' :: 'e' :: 'v' :: (printNat d ++ printLocal loc));
             let (dev', rest₅) := parseDev rest₄;
-            (({ epoch := e, release := rel, pre := none, post := post', dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, none, none, some d⟩, [])
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := none, post := post',
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, none, some d, loc⟩, [])
         rw [parsePost_none_d]
-        show some (let (dev', rest₅) := parseDev (printDev (some d));
-            (({ epoch := e, release := rel, pre := none, post := none, dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, none, none, some d⟩, [])
-        rw [parseDev_printDev_last]
+        show some (let (dev', rest₅) :=
+              parseDev (printDev (some d) ++ printLocal loc);
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := none, post := none,
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, none, some d, loc⟩, [])
+        rw [parseDev_printDev d _ (local_tail_ok loc)]
+        show some (let (loc', rest₆) := parseLocal (printLocal loc);
+            (({ epoch := e, release := rel, pre := none, post := none,
+                dev := some d, localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, none, some d, loc⟩, [])
+        rw [parseLocal_print loc hloc]
     | some m =>
       show some (let (pre', rest₃) :=
-            parsePre ('.' :: 'p' :: 'o' :: 's' :: 't' :: (printNat m ++ printDev dev));
+            parsePre ('.' :: 'p' :: 'o' :: 's' :: 't'
+              :: (printNat m ++ (printDev dev ++ printLocal loc)));
           let (post', rest₄) := parsePost rest₃;
           let (dev', rest₅) := parseDev rest₄;
-          (({ epoch := e, release := rel, pre := pre', post := post', dev := dev' } : Version), rest₅))
-          = some (⟨e, rel, none, some m, dev⟩, [])
+          let (loc', rest₆) := parseLocal rest₅;
+          (({ epoch := e, release := rel, pre := pre', post := post',
+              dev := dev', localPart := loc' } : Version), rest₆))
+          = some (⟨e, rel, none, some m, dev, loc⟩, [])
       rw [parsePre_none_po]
-      show some (let (post', rest₄) := parsePost (printPost (some m) ++ printDev dev);
+      show some (let (post', rest₄) :=
+            parsePost (printPost (some m) ++ (printDev dev ++ printLocal loc));
           let (dev', rest₅) := parseDev rest₄;
-          (({ epoch := e, release := rel, pre := none, post := post', dev := dev' } : Version), rest₅))
-          = some (⟨e, rel, none, some m, dev⟩, [])
-      rw [parsePost_printPost m _ (dev_tail_ok dev)]
-      show some (let (dev', rest₅) := parseDev (printDev dev);
-          (({ epoch := e, release := rel, pre := none, post := some m, dev := dev' } : Version), rest₅))
-          = some (⟨e, rel, none, some m, dev⟩, [])
+          let (loc', rest₆) := parseLocal rest₅;
+          (({ epoch := e, release := rel, pre := none, post := post',
+              dev := dev', localPart := loc' } : Version), rest₆))
+          = some (⟨e, rel, none, some m, dev, loc⟩, [])
+      rw [parsePost_printPost m _ (dev_local_facts dev loc)]
+      show some (let (dev', rest₅) := parseDev (printDev dev ++ printLocal loc);
+          let (loc', rest₆) := parseLocal rest₅;
+          (({ epoch := e, release := rel, pre := none, post := some m,
+              dev := dev', localPart := loc' } : Version), rest₆))
+          = some (⟨e, rel, none, some m, dev, loc⟩, [])
       cases dev with
       | none =>
-        show some (let (dev', rest₅) := parseDev [];
-            (({ epoch := e, release := rel, pre := none, post := some m, dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, none, some m, none⟩, [])
-        rw [parseDev_none_nil]
+        show some (let (dev', rest₅) := parseDev (printLocal loc);
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := none, post := some m,
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, some m, none, loc⟩, [])
+        rw [parseDev_none_local]
+        show some (let (loc', rest₆) := parseLocal (printLocal loc);
+            (({ epoch := e, release := rel, pre := none, post := some m,
+                dev := none, localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, some m, none, loc⟩, [])
+        rw [parseLocal_print loc hloc]
       | some d =>
-        show some (let (dev', rest₅) := parseDev (printDev (some d));
-            (({ epoch := e, release := rel, pre := none, post := some m, dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, none, some m, some d⟩, [])
-        rw [parseDev_printDev_last]
+        show some (let (dev', rest₅) :=
+              parseDev (printDev (some d) ++ printLocal loc);
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := none, post := some m,
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, some m, some d, loc⟩, [])
+        rw [parseDev_printDev d _ (local_tail_ok loc)]
+        show some (let (loc', rest₆) := parseLocal (printLocal loc);
+            (({ epoch := e, release := rel, pre := none, post := some m,
+                dev := some d, localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, none, some m, some d, loc⟩, [])
+        rw [parseLocal_print loc hloc]
   | some p =>
     obtain ⟨k, n⟩ := p
-    rw [parsePre_printPre k n _ (tail_facts post dev)]
-    show some (let (post', rest₄) := parsePost (printPost post ++ printDev dev);
+    rw [parsePre_printPre k n _ (tail_facts post dev loc)]
+    show some (let (post', rest₄) :=
+          parsePost (printPost post ++ (printDev dev ++ printLocal loc));
         let (dev', rest₅) := parseDev rest₄;
-        (({ epoch := e, release := rel, pre := some (k, n), post := post', dev := dev' } : Version), rest₅))
-        = some (⟨e, rel, some (k, n), post, dev⟩, [])
+        let (loc', rest₆) := parseLocal rest₅;
+        (({ epoch := e, release := rel, pre := some (k, n), post := post',
+            dev := dev', localPart := loc' } : Version), rest₆))
+        = some (⟨e, rel, some (k, n), post, dev, loc⟩, [])
     cases post with
     | none =>
       cases dev with
       | none =>
-        show some (let (post', rest₄) := parsePost [];
+        show some (let (post', rest₄) := parsePost (printLocal loc);
             let (dev', rest₅) := parseDev rest₄;
-            (({ epoch := e, release := rel, pre := some (k, n), post := post', dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, some (k, n), none, none⟩, [])
-        rw [parsePost_none_nil]
-        show some (let (dev', rest₅) := parseDev [];
-            (({ epoch := e, release := rel, pre := some (k, n), post := none, dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, some (k, n), none, none⟩, [])
-        rw [parseDev_none_nil]
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := some (k, n), post := post',
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, some (k, n), none, none, loc⟩, [])
+        rw [parsePost_none_local]
+        show some (let (dev', rest₅) := parseDev (printLocal loc);
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := some (k, n), post := none,
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, some (k, n), none, none, loc⟩, [])
+        rw [parseDev_none_local]
+        show some (let (loc', rest₆) := parseLocal (printLocal loc);
+            (({ epoch := e, release := rel, pre := some (k, n), post := none,
+                dev := none, localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, some (k, n), none, none, loc⟩, [])
+        rw [parseLocal_print loc hloc]
       | some d =>
-        show some (let (post', rest₄) := parsePost ('.' :: 'd' :: 'e' :: 'v' :: printNat d);
+        show some (let (post', rest₄) :=
+              parsePost ('.' :: 'd' :: 'e' :: 'v' :: (printNat d ++ printLocal loc));
             let (dev', rest₅) := parseDev rest₄;
-            (({ epoch := e, release := rel, pre := some (k, n), post := post', dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, some (k, n), none, some d⟩, [])
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := some (k, n), post := post',
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, some (k, n), none, some d, loc⟩, [])
         rw [parsePost_none_d]
-        show some (let (dev', rest₅) := parseDev (printDev (some d));
-            (({ epoch := e, release := rel, pre := some (k, n), post := none, dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, some (k, n), none, some d⟩, [])
-        rw [parseDev_printDev_last]
+        show some (let (dev', rest₅) :=
+              parseDev (printDev (some d) ++ printLocal loc);
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := some (k, n), post := none,
+                dev := dev', localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, some (k, n), none, some d, loc⟩, [])
+        rw [parseDev_printDev d _ (local_tail_ok loc)]
+        show some (let (loc', rest₆) := parseLocal (printLocal loc);
+            (({ epoch := e, release := rel, pre := some (k, n), post := none,
+                dev := some d, localPart := loc' } : Version), rest₆))
+            = some (⟨e, rel, some (k, n), none, some d, loc⟩, [])
+        rw [parseLocal_print loc hloc]
     | some m =>
-      rw [parsePost_printPost m _ (dev_tail_ok dev)]
-      show some (let (dev', rest₅) := parseDev (printDev dev);
-          (({ epoch := e, release := rel, pre := some (k, n), post := some m, dev := dev' } : Version), rest₅))
-          = some (⟨e, rel, some (k, n), some m, dev⟩, [])
+      show some (let (post', rest₄) :=
+            parsePost (printPost (some m) ++ (printDev dev ++ printLocal loc));
+          let (dev', rest₅) := parseDev rest₄;
+          let (loc', rest₆) := parseLocal rest₅;
+          (({ epoch := e, release := rel, pre := some (k, n), post := post',
+              dev := dev', localPart := loc' } : Version), rest₆))
+          = some (⟨e, rel, some (k, n), some m, dev, loc⟩, [])
+      rw [parsePost_printPost m _ (dev_local_facts dev loc)]
+      show some (let (dev', rest₅) := parseDev (printDev dev ++ printLocal loc);
+          let (loc', rest₆) := parseLocal rest₅;
+          (({ epoch := e, release := rel, pre := some (k, n), post := some m,
+              dev := dev', localPart := loc' } : Version), rest₆))
+          = some (⟨e, rel, some (k, n), some m, dev, loc⟩, [])
       cases dev with
       | none =>
-        show some (let (dev', rest₅) := parseDev [];
-            (({ epoch := e, release := rel, pre := some (k, n), post := some m, dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, some (k, n), some m, none⟩, [])
-        rw [parseDev_none_nil]
+        show some (let (dev', rest₅) := parseDev (printLocal loc);
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := some (k, n),
+                post := some m, dev := dev', localPart := loc' } : Version),
+              rest₆))
+            = some (⟨e, rel, some (k, n), some m, none, loc⟩, [])
+        rw [parseDev_none_local]
+        show some (let (loc', rest₆) := parseLocal (printLocal loc);
+            (({ epoch := e, release := rel, pre := some (k, n),
+                post := some m, dev := none, localPart := loc' } : Version),
+              rest₆))
+            = some (⟨e, rel, some (k, n), some m, none, loc⟩, [])
+        rw [parseLocal_print loc hloc]
       | some d =>
-        show some (let (dev', rest₅) := parseDev (printDev (some d));
-            (({ epoch := e, release := rel, pre := some (k, n), post := some m, dev := dev' } : Version), rest₅))
-            = some (⟨e, rel, some (k, n), some m, some d⟩, [])
-        rw [parseDev_printDev_last]
+        show some (let (dev', rest₅) :=
+              parseDev (printDev (some d) ++ printLocal loc);
+            let (loc', rest₆) := parseLocal rest₅;
+            (({ epoch := e, release := rel, pre := some (k, n),
+                post := some m, dev := dev', localPart := loc' } : Version),
+              rest₆))
+            = some (⟨e, rel, some (k, n), some m, some d, loc⟩, [])
+        rw [parseDev_printDev d _ (local_tail_ok loc)]
+        show some (let (loc', rest₆) := parseLocal (printLocal loc);
+            (({ epoch := e, release := rel, pre := some (k, n),
+                post := some m, dev := some d, localPart := loc' } : Version),
+              rest₆))
+            = some (⟨e, rel, some (k, n), some m, some d, loc⟩, [])
+        rw [parseLocal_print loc hloc]
 
 /-- The whole reader on a print: the leading v drop, the
     epoch, and then the rest. -/
 theorem parseVersion_print (v : Version) (h : WF v) :
     parseVersion (print v) = some (v, []) := by
-  obtain ⟨e, rel, pre, post, dev⟩ := v
-  have hrel : rel ≠ [] := h
-  obtain ⟨hokS, -, hbang⟩ := suffix_facts pre post dev
-  have hstrip : stripV (print ⟨e, rel, pre, post, dev⟩)
-      = print ⟨e, rel, pre, post, dev⟩ :=
-    stripV_print ⟨e, rel, pre, post, dev⟩ h
-  show parseVersion (print ⟨e, rel, pre, post, dev⟩)
-      = some (⟨e, rel, pre, post, dev⟩, [])
+  obtain ⟨e, rel, pre, post, dev, loc⟩ := v
+  have hrel : rel ≠ [] := h.1
+  have hloc : LocalOptWF loc := h.2
+  obtain ⟨hokS, -, hbang⟩ := suffix_facts pre post dev loc
+  have hstrip : stripV (print ⟨e, rel, pre, post, dev, loc⟩)
+      = print ⟨e, rel, pre, post, dev, loc⟩ :=
+    stripV_print ⟨e, rel, pre, post, dev, loc⟩ h
+  show parseVersion (print ⟨e, rel, pre, post, dev, loc⟩)
+      = some (⟨e, rel, pre, post, dev, loc⟩, [])
   unfold parseVersion
   rw [hstrip]
-  show (let (e', rest₁) := parseEpoch (print ⟨e, rel, pre, post, dev⟩);
+  show (let (e', rest₁) := parseEpoch (print ⟨e, rel, pre, post, dev, loc⟩);
       (parseRelease rest₁).map fun (rel', rest₂) =>
         let (pre', rest₃) := parsePre rest₂
         let (post', rest₄) := parsePost rest₃
         let (dev', rest₅) := parseDev rest₄
-        (({ epoch := e', release := rel', pre := pre', post := post', dev := dev' } : Version), rest₅))
-      = some (⟨e, rel, pre, post, dev⟩, [])
+        let (loc', rest₆) := parseLocal rest₅
+        (({ epoch := e', release := rel', pre := pre', post := post',
+            dev := dev', localPart := loc' } : Version), rest₆))
+      = some (⟨e, rel, pre, post, dev, loc⟩, [])
   by_cases he : e = 0
   · subst he
     rw [print_zero, parseEpoch_release hrel _ hokS hbang]
     show (parseRelease (printRelease rel
-        ++ (printPre pre ++ (printPost post ++ printDev dev)))).map
+        ++ (printPre pre ++ (printPost post ++ (printDev dev
+          ++ printLocal loc))))).map
         (fun (rel', rest₂) =>
           let (pre', rest₃) := parsePre rest₂
           let (post', rest₄) := parsePost rest₃
           let (dev', rest₅) := parseDev rest₄
-          (({ epoch := 0, release := rel', pre := pre', post := post', dev := dev' } : Version), rest₅))
-        = some (⟨0, rel, pre, post, dev⟩, [])
-    exact parseRest_print 0 rel hrel pre post dev
+          let (loc', rest₆) := parseLocal rest₅
+          (({ epoch := 0, release := rel', pre := pre', post := post',
+              dev := dev', localPart := loc' } : Version), rest₆))
+        = some (⟨0, rel, pre, post, dev, loc⟩, [])
+    exact parseRest_print 0 rel hrel pre post dev loc hloc
   · rw [print_pos he, parseEpoch_pos]
     show (parseRelease (printRelease rel
-        ++ (printPre pre ++ (printPost post ++ printDev dev)))).map
+        ++ (printPre pre ++ (printPost post ++ (printDev dev
+          ++ printLocal loc))))).map
         (fun (rel', rest₂) =>
           let (pre', rest₃) := parsePre rest₂
           let (post', rest₄) := parsePost rest₃
           let (dev', rest₅) := parseDev rest₄
-          (({ epoch := e, release := rel', pre := pre', post := post', dev := dev' } : Version), rest₅))
-        = some (⟨e, rel, pre, post, dev⟩, [])
-    exact parseRest_print e rel hrel pre post dev
+          let (loc', rest₆) := parseLocal rest₅
+          (({ epoch := e, release := rel', pre := pre', post := post',
+              dev := dev', localPart := loc' } : Version), rest₆))
+        = some (⟨e, rel, pre, post, dev, loc⟩, [])
+    exact parseRest_print e rel hrel pre post dev loc hloc
 
 /-- The main theorem: parsing the printed form of a well
     formed version gives the version back. -/

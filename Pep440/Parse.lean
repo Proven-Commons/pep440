@@ -6,11 +6,12 @@
 
   The grammar is read in stages: an optional leading v, the
   epoch, the release, then the pre-release, post-release, and
-  dev-release segments in that order. A segment that is not
-  there reads as absent and leaves the input untouched; a text
-  with anything left over at the end is rejected. A plus sign,
-  which would open a local version, is never consumed, so local
-  versions are rejected by the end check.
+  dev-release segments in that order, then the local part
+  behind a plus sign. A segment that is not there reads as
+  absent and leaves the input untouched; a text with anything
+  left over at the end is rejected. A local part that starts
+  but breaks its grammar is not read as absent either: its
+  text stays in the leftover, and the end check rejects it.
 -/
 
 import Pep440.Version
@@ -181,6 +182,62 @@ def parseDev (cs : List Char) : Option Nat × List Char :=
 def stripV (cs : List Char) : List Char :=
   if cs.head? = some 'v' || cs.head? = some 'V' then cs.tail else cs
 
+/-- The longest run of letter-or-digit characters at the front
+    of the input, and what is left. -/
+def takeAlnum : List Char → List Char × List Char
+  | [] => ([], [])
+  | c :: cs =>
+    if isAlnum c then
+      let (a, b) := takeAlnum cs
+      (c :: a, b)
+    else ([], c :: cs)
+
+/-- Read one local segment: a nonempty run of letters and
+    digits. A run of digits only reads as a number, leading
+    zeros and all, since the value is a number. Any other run
+    reads as a text, lowercased. -/
+def parseLocalSeg (cs : List Char) : Option (LocalSeg × List Char) :=
+  let (ds, rest) := takeAlnum cs
+  if ds.isEmpty then none
+  else if ds.all isDigit then some (.num (digitsValue ds), rest)
+  else some (.str (ds.map lower), rest)
+
+/-- Read the segments of a local part: segments split by one
+    separator each, a dot, a hyphen, or an underscore. The fuel
+    is found by the caller; each segment takes at least one
+    character, so the length of the input bounds the count. A
+    separator that is not followed by a segment fails the
+    whole read, as does a first segment that is not there. -/
+def parseLocalGo : Nat → List Char → Option (List LocalSeg × List Char)
+  | 0, _ => none
+  | fuel + 1, cs =>
+    match parseLocalSeg cs with
+    | none => none
+    | some (s, rest) =>
+      match rest with
+      | [] => some ([s], [])
+      | c :: rest' =>
+        if isSep c then
+          match parseLocalGo fuel rest' with
+          | some (ss, rest'') => some (s :: ss, rest'')
+          | none => none
+        else some ([s], c :: rest')
+
+/-- Read the local part: a plus, then the segments. When the
+    input does not open with a plus, the part is absent and
+    the input is returned untouched. When it does open with a
+    plus and the segments do not read, the part reads as
+    absent too, but the input, plus included, stays in what is
+    returned, so the caller's end check rejects the text: a
+    broken local part is never read as no local part. -/
+def parseLocal (cs : List Char) : Option (List LocalSeg) × List Char :=
+  match cs with
+  | '+' :: rest =>
+    match parseLocalGo (rest.length + 1) rest with
+    | some (segs, rest') => (some segs, rest')
+    | none => (none, cs)
+  | _ => (none, cs)
+
 /-- Read a whole version, returning the version and the
     characters left over. -/
 def parseVersion (cs₀ : List Char) : Option (Version × List Char) :=
@@ -190,8 +247,9 @@ def parseVersion (cs₀ : List Char) : Option (Version × List Char) :=
     let (pre, rest₃) := parsePre rest₂
     let (post, rest₄) := parsePost rest₃
     let (dev, rest₅) := parseDev rest₄
+    let (loc, rest₆) := parseLocal rest₅
     ({ epoch := e, release := rel, pre := pre, post := post,
-       dev := dev }, rest₅)
+       dev := dev, localPart := loc }, rest₆)
 
 /-- Parse a version from a character list. Anything after the
     version makes the text rejected, as does any grammar break. -/

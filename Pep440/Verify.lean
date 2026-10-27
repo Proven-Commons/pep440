@@ -18,4 +18,7 @@ open Pep440.Proofs Pep440.Examples
 #print axioms chain_14
 #print axioms eq_alpha_spelling
 #print axioms reprint_chain_member
-#print axioms invalid_local
+#print axioms local_absent_first
+#print axioms local_prefix
+#print axioms local_eq_seps
+#print axioms invalid_local_empty_segment

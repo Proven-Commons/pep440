@@ -7,7 +7,9 @@ Three parts.
    as `cmp` requests, valid texts and their canonical reprints
    as `parse` requests, and texts the grammar forbids (each
    must be rejected). Local version texts are fixed cases too:
-   they are out of this slice's scope and must be rejected.
+   valid local parts with their canonical reprints, order
+   pairs across the local rules, and the local shapes the
+   grammar forbids.
 
 2. A differential run. Python's `packaging` library is the
    oracle for values: it is checked for at the start and its
@@ -28,9 +30,9 @@ Three parts.
 
 3. Mutated and soup texts, settled by a strict oracle in this
    harness that mirrors the SPEC stage by stage (packaging is
-   more lenient there: it trims whitespace and accepts local
-   versions, both outside this slice). Malformed request lines
-   must be answered `error`.
+   more lenient there: it trims whitespace, which this slice
+   rejects). Malformed request lines must be answered
+   `error`.
 
 The strict oracle shares no code with the Lean side. The seed
 is recorded in the results file.
@@ -161,12 +163,16 @@ def run_tool(lines, timeout=TIMEOUT):
 # The canonical form, from the SPEC rules: the epoch with a
 # bang when above zero, the release numbers dot joined, the
 # pre-release as .aN, .bN, or .rcN, the post as .postN, the
-# dev as .devN. A value is (epoch, release, pre, post, dev),
-# with pre a (kind, number) pair or None.
+# dev as .devN, and the local part as a plus and its segments
+# dot joined (a number segment in plain decimal, a text
+# segment as held). A value is (epoch, release, pre, post,
+# dev, local), with pre a (kind, number) pair or None, and
+# local a list of segments or None; a segment is an int for
+# a number segment and a str for a text segment.
 
 
 def canonical(v):
-    epoch, release, pre, post, dev = v
+    epoch, release, pre, post, dev, local = v
     out = ""
     if epoch:
         out += f"{epoch}!"
@@ -177,15 +183,20 @@ def canonical(v):
         out += f".post{post}"
     if dev is not None:
         out += f".dev{dev}"
+    if local is not None:
+        out += "+" + ".".join(
+            str(seg) if isinstance(seg, int) else seg for seg in local
+        )
     return out
 
 
 # ------------------------------------------------------------------
 # The strict oracle, mirroring the SPEC stage by stage: an
 # optional leading v, the epoch, the release, then the pre,
-# post, and dev segments in that order, and nothing left over.
-# It is the reader for mutated and soup texts, where packaging
-# would accept shapes this slice rejects.
+# post, and dev segments in that order, then the local part
+# behind a plus, and nothing left over. It is the reader for
+# mutated and soup texts, where packaging would accept shapes
+# this slice rejects.
 
 
 def lower1(c):
@@ -233,9 +244,10 @@ PRE_TABLE = [
 POST_TABLE = ["post", "rev", "r"]
 
 
+ALNUM = set(DIGITS + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
 def strict_parse(text):
-    if "+" in text:
-        return None
     s = text
     i = 0
     if i < len(s) and s[i] in "vV":
@@ -283,9 +295,30 @@ def strict_parse(text):
     if m is not None:
         n, i = opt_num(s, m)
         dev = n
+    local = None
+    if i < len(s) and s[i] == "+":
+        i += 1
+        segs = []
+        while True:
+            j = i
+            while j < len(s) and s[j] in ALNUM:
+                j += 1
+            seg = s[i:j]
+            if not seg:
+                return None
+            if all(ch in DIGITS for ch in seg):
+                segs.append(int(seg))
+            else:
+                segs.append(seg.lower())
+            i = j
+            if i < len(s) and s[i] in ".-_":
+                i += 1
+                continue
+            break
+        local = segs
     if i != len(s):
         return None
-    return (epoch, release, pre, post, dev)
+    return (epoch, release, pre, post, dev, local)
 
 
 def strict_expected(text):
@@ -335,6 +368,16 @@ VALID_REPRINT = [
     ("1.0b2.post345.dev456", "1.0.b2.post345.dev456"),
     ("1!2.0_ALPHA.1-3_dev4", "1!2.0.a1.post3.dev4"),
     ("1.0-post", "1.0.post0"),
+    ("1.0+local", "1.0+local"),
+    ("1.0a1+ubuntu.1", "1.0.a1+ubuntu.1"),
+    ("2!1.0+abc.5", "2!1.0+abc.5"),
+    ("1.0.post1+local.2", "1.0.post1+local.2"),
+    ("1.0+ABC", "1.0+abc"),
+    ("1.0+foo-bar", "1.0+foo.bar"),
+    ("1.0+foo_bar", "1.0+foo.bar"),
+    ("1.0+007", "1.0+7"),
+    ("1.0+0a", "1.0+0a"),
+    ("1.0+1a.2b", "1.0+1a.2b"),
 ]
 
 INVALID = [
@@ -358,13 +401,27 @@ INVALID = [
     "1.0al",
     "1..1",
     "vv1.0",
+    "1.0+",
+    "1.0+a..b",
+    "1.0+a.",
+    "1.0+.a",
+    "1.0+a+b",
+    "1.0++a",
+    "1.0+a b",
+    "1.0+a-b-",
 ]
 
-LOCAL = [
-    "1.0+local",
-    "1.0a1+ubuntu.1",
-    "2!1.0+abc.5",
-    "1.0.post1+local.2",
+LOCAL_CMP = [
+    ("1.0", "1.0+1", "lt"),
+    ("1.0+abc", "1.0+1", "lt"),
+    ("1.0+abc", "1.0+abc.1", "lt"),
+    ("1.0+1", "1.0+2", "lt"),
+    ("1.0+a1", "1.0+1", "lt"),
+    ("1.0+abc", "1.0+abd", "lt"),
+    ("1.0+abc.1", "1.0+abc.2", "lt"),
+    ("1.0+ABC", "1.0+abc", "eq"),
+    ("1.0+foo-bar", "1.0+foo.bar", "eq"),
+    ("1.0+007", "1.0+7", "eq"),
 ]
 
 MALFORMED = [
@@ -402,7 +459,23 @@ def random_value(rng):
     dev = None
     if rng.random() < 0.35:
         dev = rng.choice([0, 1, 34, 456])
-    return (epoch, release, pre, post, dev)
+    local = random_local(rng) if rng.random() < 0.5 else None
+    return (epoch, release, pre, post, dev, local)
+
+
+def random_local(rng):
+    local = []
+    for _ in range(rng.randrange(1, 5)):
+        if rng.random() < 0.5:
+            local.append(rng.choice([0, 1, 2, 7, 42, 2024]))
+        else:
+            local.append(
+                rng.choice(
+                    ["abc", "a1", "rc", "x9", "0a", "foo", "bar2",
+                     "ubuntu", "a", "zz"]
+                )
+            )
+    return local
 
 
 def zeros(n, rng):
@@ -422,7 +495,7 @@ def mangle_case(word, rng):
 
 
 def spell(v, rng):
-    epoch, release, pre, post, dev = v
+    epoch, release, pre, post, dev, local = v
     out = ""
     if rng.random() < 0.3:
         out += rng.choice("vV")
@@ -451,6 +524,16 @@ def spell(v, rng):
             out += rng.choice(seps) + word + num_suffix(post, rng)
     if dev is not None:
         out += rng.choice(seps) + mangle_case("dev", rng) + num_suffix(dev, rng)
+    if local is not None:
+        parts = []
+        for seg in local:
+            if isinstance(seg, int):
+                parts.append(zeros(seg, rng))
+            else:
+                parts.append(mangle_case(seg, rng))
+        out += "+" + parts[0]
+        for part in parts[1:]:
+            out += rng.choice([".", "-", "_"]) + part
     return out
 
 
@@ -486,6 +569,13 @@ def packaging_value_check(text, v):
     want = (v[0], v[2], v[3], v[4])
     if fields != want:
         return f"packaging fields for {text!r} are {fields}, not {want}"
+    want_local = None
+    if v[5] is not None:
+        want_local = ".".join(
+            str(seg) if isinstance(seg, int) else seg for seg in v[5]
+        )
+    if pv.local != want_local:
+        return f"packaging local for {text!r} is {pv.local!r}, not {want_local!r}"
     return None
 
 
@@ -538,20 +628,32 @@ def main():
         fixed_parse.append((parse_request(text), "none"))
         if strict_parse(text) is not None:
             failures.append(f"fixed parse cases: strict oracle accepts {text!r}")
-    for text in LOCAL:
-        fixed_parse.append((parse_request(text), "none"))
     fixed_parse.append(("parse", "none"))
     fixed_parse.append(("parse ", "none"))
     section("fixed parse cases", fixed_parse)
 
-    fixed_cmp = []
+    cmp_pairs = []
     for a, b in zip(CHAIN, CHAIN[1:]):
-        fixed_cmp.append((cmp_request(a, b), "lt"))
-        fixed_cmp.append((cmp_request(b, a), "gt"))
-    fixed_cmp.append((cmp_request(CHAIN[0], CHAIN[-1]), "lt"))
-    fixed_cmp.append((cmp_request("1.0", "1.0.0"), "eq"))
-    fixed_cmp.append((cmp_request("1.0a1", "1.0.alpha1"), "eq"))
-    fixed_cmp.append((cmp_request("1.0+local", "1.0"), "none"))
+        cmp_pairs.append((a, b, "lt"))
+        cmp_pairs.append((b, a, "gt"))
+    cmp_pairs.append((CHAIN[0], CHAIN[-1], "lt"))
+    cmp_pairs.append(("1.0", "1.0.0", "eq"))
+    cmp_pairs.append(("1.0a1", "1.0.alpha1", "eq"))
+    for a, b, want in LOCAL_CMP:
+        cmp_pairs.append((a, b, want))
+        if want == "lt":
+            cmp_pairs.append((b, a, "gt"))
+    fixed_cmp = []
+    for a, b, want in cmp_pairs:
+        va, vb = Version(a), Version(b)
+        got = "lt" if va < vb else "gt" if va > vb else "eq"
+        if got != want:
+            failures.append(
+                f"fixed cmp cases: packaging orders {a!r} against {b!r} "
+                f"as {got}, not {want}"
+            )
+        fixed_cmp.append((cmp_request(a, b), want))
+    fixed_cmp.append((cmp_request("1.0+local", "1.0"), "gt"))
     fixed_cmp.append(("cmp 49,59", "none"))
     section("fixed cmp cases", fixed_cmp)
 
@@ -583,6 +685,18 @@ def main():
         want = "lt" if va < vb else "gt" if va > vb else "eq"
         rand_cmp.append((cmp_request(a, b), want))
     section("random version pairs, cmp", rand_cmp)
+
+    local_cmp = []
+    for _ in range(args.count // 3):
+        base = random_value(rng)
+        va_v = base[:5] + (random_local(rng),)
+        vb_v = base[:5] + (random_local(rng),)
+        a = spell(va_v, rng)
+        b = spell(vb_v, rng)
+        va, vb = Version(canonical(va_v)), Version(canonical(vb_v))
+        want = "lt" if va < vb else "gt" if va > vb else "eq"
+        local_cmp.append((cmp_request(a, b), want))
+    section("random local pairs, cmp", local_cmp)
 
     mutated = []
     for text in texts:
@@ -640,10 +754,11 @@ def main():
         "include both texts and expect rejection."
     )
     lines_out.append(
-        "- Packaging accepts local versions (for example `1.0+local`); "
-        "local versions are out of this slice's scope and are rejected. "
-        "The fixed parse cases include four local texts and expect "
-        "rejection for each."
+        "- Local versions are in scope in this slice, and a local part "
+        "prints exactly as packaging prints it: lowercase text, "
+        "segments dot joined, numbers without leading zeros. Every "
+        "print difference in this run traces to the pre-release dot "
+        "above; no difference came from a local part."
     )
     lines_out.append("")
 
