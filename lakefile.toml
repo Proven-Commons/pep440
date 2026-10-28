@@ -1,13 +1,14 @@
 name = "pep440"
 version = "0.1.0"
 license = "Apache-2.0"
-defaultTargets = ["Pep440", "Proofs", "pep440"]
+defaultTargets = ["Pep440", "Pep440Proofs", "pep440"]
 
 [[lean_lib]]
 name = "Pep440"
 
 [[lean_lib]]
-name = "Proofs"
+name = "Pep440Proofs"
+roots = ["Pep440.Proofs"]
 
 [[lean_exe]]
 name = "pep440"
