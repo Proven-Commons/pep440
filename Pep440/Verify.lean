@@ -8,8 +8,8 @@
   a proof rests on an admitted gap, and the claim is not proved.
 -/
 
-import Proofs
-import Proofs.Examples
+import Pep440.Proofs
+import Pep440.Proofs.Examples
 
 open Pep440.Proofs Pep440.Examples
 

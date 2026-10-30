@@ -10,7 +10,7 @@ The specification this follows is PEP 440 (version identification and dependency
 
 ## What is proved
 
-The definitions are in `Pep440/Version.lean` and `Pep440/Parse.lean`. The proofs are in `Proofs/`.
+The definitions are in `Pep440/Version.lean` and `Pep440/Parse.lean`. The proofs are in `Pep440/Proofs/`.
 
 | Claim | Theorem |
 |-------|---------|
